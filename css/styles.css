@@ -162,3 +162,28 @@ ol.guide li { margin-bottom: 8px; }
 .empty { text-align: center; padding: 30px 10px; color: var(--muted); }
 .switch { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; }
 a { color: var(--accent); }
+
+/* grabación */
+.recbar {
+  position: fixed; left: 8px; right: 8px; bottom: calc(66px + env(safe-area-inset-bottom)); z-index: 6;
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  background: var(--panel); border: 1px solid var(--bad); border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.5);
+  max-width: 744px; margin: 0 auto;
+}
+.recbar .btn { padding: 8px 12px; }
+.recdot { width: 12px; height: 12px; border-radius: 50%; background: var(--bad); animation: blink 1s infinite; flex: none; }
+@keyframes blink { 50% { opacity: .25; } }
+.meter { flex: 1; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; min-width: 30px; }
+.meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--good), var(--warn), var(--bad)); transition: width .1s; }
+body.recording .view { padding-bottom: 150px; }
+.btn.rec { background: var(--bad); color: #fff; }
+.mini { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 7px; font-size: 13px; cursor: pointer; }
+.nowrap { white-space: nowrap; }
+audio { width: 100%; margin-top: 8px; }
+details summary { cursor: pointer; }
+.tabs button { font-size: 11px; }
+.recbar[hidden] { display: none; }
+label.field { min-width: 0; }
+.grid2 > *, .grid3 > * { min-width: 0; }
+.tbl .mini { padding: 3px 5px; font-size: 12px; }
+.tbl td.nowrap { text-align: right; padding-right: 0; }

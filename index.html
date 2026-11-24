@@ -27,8 +27,16 @@
     <button data-view="passes" class="active" type="button"><span>🕒</span>Pasadas</button>
     <button data-view="sats" type="button"><span>🛰️</span>Satélites</button>
     <button data-view="track" type="button"><span>🎯</span>Apuntar</button>
+    <button data-view="log" type="button"><span>🎙️</span>Log</button>
     <button data-view="settings" type="button"><span>⚙️</span>Ajustes</button>
   </nav>
+
+  <div id="recbar" class="recbar" hidden>
+    <span class="recdot"></span><b id="recTime" class="num">0:00</b><span id="recSat" class="small"></span>
+    <span class="meter"><i id="recLevel"></i></span>
+    <button class="btn" data-action="qso-mark" type="button">＋ QSO</button>
+    <button class="btn secondary" data-action="rec-stop" type="button" aria-label="Detener grabación">■</button>
+  </div>
 
   <dialog id="sheet" class="sheet"><div id="sheetBody"></div></dialog>
   <div id="toast" class="toast" hidden></div>

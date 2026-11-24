@@ -1,5 +1,8 @@
 import { parseTLE, makeSatrec, tleEpoch, observer, look, findPasses, doppler, cardinal, cardinal8 } from './orbit.js';
 import { SATS, BY_NORAD } from './sats.js';
+import { db, uid } from './db.js';
+import { Recorder, recoverOrphans, canRecord, extFor } from './recorder.js';
+import { toADIF, adifMode, bandOf } from './adif.js';
 
 // ---------- utilidades ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -50,7 +53,7 @@ function maidenhead(lat, lon) {
 // ---------- estado ----------
 const state = {
   loc: LS.get('loc', null),
-  settings: { minEl: 10, hours: 48, decl: 0, showAll: false, night: false, ...LS.get('settings', {}) },
+  settings: { minEl: 10, hours: 48, decl: 0, showAll: false, night: false, myCall: '', ...LS.get('settings', {}) },
   favs: new Set(LS.get('favs', SATS.map(s => s.norad))),
   tle: LS.get('tle', null),
   sats: new Map(),
@@ -61,6 +64,7 @@ const state = {
   trackPasses: { norad: null, list: [] },
   heading: null, pitch: null, compassOn: false,
   wakeLock: null, installPrompt: null,
+  recorder: new Recorder(),
 };
 const saveSettings = () => LS.set('settings', state.settings);
 const saveFavs = () => LS.set('favs', [...state.favs]);
@@ -378,6 +382,8 @@ function viewTrack() {
     <div id="trackLive"></div>
     <h3>Apuntar con el teléfono</h3>
     <div class="card" id="pointerCard">${pointerHTML()}</div>
+    <h3>Grabar la pasada</h3>
+    <div class="card">${recButton(state.trackNorad)}</div>
     <div class="btns"><button class="btn secondary" data-action="wakelock">${state.wakeLock ? '🔆 Pantalla siempre encendida ✓' : '🔆 Mantener pantalla encendida'}</button></div>`;
 }
 
@@ -470,6 +476,10 @@ function viewSettings() {
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const sel = (key, vals, unit) => `<select data-setting="${key}">${vals.map(v => `<option value="${v}" ${state.settings[key] == v ? 'selected' : ''}>${v}${unit}</option>`).join('')}</select>`;
   return `<h2>Ajustes</h2>
+  <div class="card"><h3 style="margin-top:0">🪪 Mi estación</h3>
+    <label class="field"><span>Mi indicativo (va en el ADIF para LoTW / QRZ)</span>
+      <input data-setting="myCall" autocapitalize="characters" autocomplete="off" value="${esc(state.settings.myCall)}" placeholder="LU1ABC"></label>
+  </div>
   <div class="card"><h3 style="margin-top:0">📍 Ubicación</h3>
     <button class="btn block" data-action="gps">Usar GPS del teléfono</button>
     <div class="grid3" style="margin-top:8px">
@@ -517,10 +527,12 @@ function render() {
   const L = state.loc;
   $('#locChip').textContent = L ? `📍 ${L.lat.toFixed(2)}, ${L.lon.toFixed(2)} · ${maidenhead(L.lat, L.lon).slice(0, 4)}` : '📍 Sin ubicación';
   const v = $('#view');
-  const html = { passes: viewPasses, sats: viewSats, track: viewTrack, settings: viewSettings }[state.view]();
+  const html = { passes: viewPasses, sats: viewSats, track: viewTrack, log: viewLog, settings: viewSettings }[state.view]();
   v.innerHTML = html;
   if (state.view === 'track') updateTrack();
+  if (state.view === 'log') loadLog();
   tickCountdowns();
+  updateRecBar();
 }
 
 function setView(view) {
@@ -545,7 +557,8 @@ function openPassSheet(p) {
     <h3>Tabla de apuntado</h3><div class="card">${pointingTable(s, p)}</div>
     ${dopplerTable(s, p)}
     ${s.info ? `<h3>Frecuencias</h3><div class="card">${s.info.modes.map(modeBlock).join('')}</div>` : ''}
-    <button class="btn block" data-track="${s.norad}">🎯 Seguir en vivo</button>`;
+    <div class="btns"><button class="btn grow" data-track="${s.norad}">🎯 Seguir en vivo</button></div>
+    <div style="margin-top:8px">${recButton(s.norad)}</div>`;
   $('#sheetBody').innerHTML = body;
   const d = $('#sheet');
   if (!d.open) d.showModal();
@@ -626,6 +639,277 @@ function useGPS() {
   );
 }
 
+// ---------- grabación ----------
+const myGrid = () => state.loc ? maidenhead(state.loc.lat, state.loc.lon) : '';
+const utcHMS = t => new Date(t).toISOString().slice(11, 19);
+const utcInput = t => new Date(t).toISOString().slice(0, 19);
+const stamp = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`; };
+
+function recButton(norad) {
+  if (!canRecord()) return '<p class="small muted">Este navegador no permite grabar audio.</p>';
+  const r = state.recorder;
+  if (r.active) {
+    return `<p class="small" style="margin-top:0">🔴 Grabando <b>${esc(r.rec.satName)}</b>…</p>
+      <div class="btns"><button class="btn grow" data-action="qso-mark">＋ Marcar QSO</button>
+      <button class="btn secondary" data-action="rec-stop">■ Detener</button></div>`;
+  }
+  return `<button class="btn block rec" data-action="rec-start" data-norad="${norad}">🎙️ Grabar pasada</button>
+    <p class="small muted">Graba por el micrófono del teléfono (acercalo al parlante del equipo) o con un cable de audio.
+    En cada contacto tocá <b>＋ Marcar QSO</b>: queda la hora exacta y una marca en el audio para volver a escucharlo.
+    La pantalla queda encendida; si se bloquea, el sistema puede cortar la grabación.</p>`;
+}
+
+async function startRecording(norad) {
+  const s = state.sats.get(norad);
+  try {
+    await state.recorder.start({ norad, satName: s?.name || String(norad), lotwSat: s?.info?.lotw || '', myGrid: myGrid() });
+    if (!state.wakeLock && 'wakeLock' in navigator) await toggleWakeLock();
+    toast('🔴 Grabando');
+  } catch (e) {
+    toast(`No se pudo grabar: ${e.name === 'NotAllowedError' ? 'permiso de micrófono denegado' : e.message}`, 5000);
+  }
+  render();
+}
+
+async function stopRecording() {
+  try {
+    const r = await state.recorder.stop();
+    if (r) toast(`Grabación guardada (${fmtDur(r.duration)}). Está en la pestaña Log.`, 4000);
+  } catch (e) { toast(`Error al guardar: ${e.message}`, 5000); }
+  render();
+}
+
+function updateRecBar() {
+  const bar = $('#recbar'), r = state.recorder;
+  bar.hidden = !r.active;
+  document.body.classList.toggle('recording', r.active);
+  if (!r.active) return;
+  $('#recTime').textContent = fmtDur(r.elapsed());
+  $('#recSat').textContent = r.rec.satName;
+}
+setInterval(() => {
+  if (state.recorder.active) $('#recLevel').style.width = `${Math.round(state.recorder.level() * 100)}%`;
+}, 120);
+
+// ---------- QSOs ----------
+function satModes(norad) {
+  return (state.sats.get(norad)?.info?.modes || BY_NORAD.get(norad)?.modes || []).filter(m => m.up != null && m.down != null);
+}
+
+function modeOptions(norad, sel = 0) {
+  const ms = satModes(norad);
+  return ms.length ? ms.map((m, i) => `<option value="${i}" ${i === sel ? 'selected' : ''}>${esc(m.label)}</option>`).join('')
+    : '<option value="-1">(sin datos: cargá frecuencias)</option>';
+}
+
+function applySatMode(norad, idx) {
+  const m = satModes(norad)[idx];
+  if (!m) return;
+  $('#q_freq').value = f3(center(m.up));
+  $('#q_freqRx').value = f3(center(m.down));
+  const mode = adifMode(m.upMode);
+  $('#q_mode').value = mode;
+  updateBandHint();
+}
+
+function updateBandHint() {
+  const tx = parseFloat($('#q_freq')?.value), rx = parseFloat($('#q_freqRx')?.value);
+  const h = $('#q_bands');
+  if (h) h.textContent = `Banda TX: ${bandOf(tx) || '—'} · Banda RX: ${bandOf(rx) || '—'}`;
+}
+
+function openQsoForm(draft) {
+  const q = { rstSent: '59', rstRcvd: '59', mode: 'FM', call: '', grid: '', note: '', ...draft };
+  const norad = q.norad ?? state.recorder.rec?.norad ?? state.trackNorad;
+  q.norad = norad;
+  state.qsoDraft = q;
+  const satOpts = [...SATS.map(x => x.norad), ...(SATS.some(x => x.norad === norad) ? [] : [norad])]
+    .map(n => `<option value="${n}" ${n === norad ? 'selected' : ''}>${esc(state.sats.get(n)?.name || BY_NORAD.get(n)?.name || q.satName || n)}</option>`).join('');
+  $('#sheetBody').innerHTML = `<button class="close" data-action="close-sheet" aria-label="Cerrar">✕</button>
+    <h2>${q.id ? 'Editar QSO' : 'Nuevo QSO'}</h2>
+    ${q.recId ? `<p class="small muted">Marca en la grabación: ${fmtDur(q.offset || 0)}</p>` : ''}
+    <div class="grid2">
+      <label class="field"><span>Indicativo *</span><input id="q_call" autocapitalize="characters" autocomplete="off" value="${esc(q.call)}" placeholder="LU1ABC"></label>
+      <label class="field"><span>Grid locator</span><input id="q_grid" autocapitalize="characters" autocomplete="off" value="${esc(q.grid)}" placeholder="GF05"></label>
+      <label class="field"><span>RST enviado</span><input id="q_rstSent" inputmode="numeric" value="${esc(q.rstSent)}"></label>
+      <label class="field"><span>RST recibido</span><input id="q_rstRcvd" inputmode="numeric" value="${esc(q.rstRcvd)}"></label>
+    </div>
+    <div class="grid2">
+      <label class="field"><span>Satélite</span><select id="q_sat">${satOpts}</select></label>
+      <label class="field"><span>Repetidora / transpondedor</span><select id="q_smode">${modeOptions(norad, q.smode ?? 0)}</select></label>
+      <label class="field"><span>TX (subida) MHz</span><input id="q_freq" inputmode="decimal" value="${q.freq ? f3(q.freq) : ''}"></label>
+      <label class="field"><span>RX (bajada) MHz</span><input id="q_freqRx" inputmode="decimal" value="${q.freqRx ? f3(q.freqRx) : ''}"></label>
+      <label class="field"><span>Modo</span><select id="q_mode">${['FM', 'SSB', 'CW', 'PKT', 'DATA'].map(m => `<option ${m === q.mode ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
+      <label class="field"><span>Fecha y hora (UTC)</span><input id="q_time" type="datetime-local" step="1" value="${utcInput(q.time)}"></label>
+    </div>
+    <div class="small muted" id="q_bands"></div>
+    <label class="field"><span>Nota</span><input id="q_note" value="${esc(q.note)}" placeholder="opcional"></label>
+    <button class="btn block" data-action="qso-save">Guardar QSO</button>`;
+  if (!q.id) applySatMode(norad, q.smode ?? 0);
+  updateBandHint();
+  const d = $('#sheet');
+  if (!d.open) d.showModal();
+  if (!q.call) setTimeout(() => $('#q_call')?.focus(), 50);
+}
+
+async function saveQsoForm() {
+  const q = state.qsoDraft;
+  const call = $('#q_call').value.trim().toUpperCase();
+  if (!/^[A-Z0-9/]{3,15}$/.test(call) || !/[0-9]/.test(call) || !/[A-Z]/.test(call)) { toast('Revisá el indicativo'); $('#q_call').focus(); return; }
+  const time = Date.parse(`${$('#q_time').value}Z`);
+  if (Number.isNaN(time)) { toast('Fecha/hora inválida'); return; }
+  const norad = +$('#q_sat').value;
+  const s = state.sats.get(norad);
+  const rec = { ...q,
+    id: q.id || uid(), call,
+    grid: $('#q_grid').value.trim().toUpperCase(),
+    rstSent: $('#q_rstSent').value.trim(), rstRcvd: $('#q_rstRcvd').value.trim(),
+    norad, satName: s?.name || BY_NORAD.get(norad)?.name || q.satName || String(norad),
+    lotwSat: (s?.info || BY_NORAD.get(norad))?.lotw || '',
+    smode: +$('#q_smode').value,
+    freq: parseFloat($('#q_freq').value.replace(',', '.')) || null,
+    freqRx: parseFloat($('#q_freqRx').value.replace(',', '.')) || null,
+    mode: $('#q_mode').value, time, note: $('#q_note').value.trim(),
+    myGrid: q.myGrid || myGrid(), myCall: state.settings.myCall || '',
+    exported: false,
+  };
+  if (q.recId && q.recStart) rec.offset = Math.max(0, time - q.recStart);
+  await db.put('qsos', rec);
+  $('#sheet').close();
+  toast(`QSO con ${call} guardado ✔`);
+  if (state.view === 'log') loadLog();
+}
+
+async function editQso(id) {
+  const q = await db.get('qsos', id);
+  if (!q) return;
+  const r = q.recId ? await db.get('recordings', q.recId) : null;
+  openQsoForm({ ...q, recStart: r?.start });
+}
+
+async function deleteQso(id) {
+  const q = await db.get('qsos', id);
+  if (!q || !confirm(`¿Borrar el QSO con ${q.call}?`)) return;
+  await db.del('qsos', id);
+  loadLog();
+}
+
+function markQso() {
+  const r = state.recorder;
+  if (!r.active) return openQsoForm({ time: Date.now() });
+  const now = Date.now();
+  openQsoForm({ recId: r.rec.id, recStart: r.rec.start, offset: now - r.rec.start, time: now, norad: r.rec.norad });
+}
+
+async function qsoAtAudio(recId) {
+  const rec = await db.get('recordings', recId);
+  const a = $(`#audio-${CSS.escape(recId)}`);
+  const offset = Math.round((a?.currentTime || 0) * 1000);
+  a?.pause();
+  openQsoForm({ recId, recStart: rec.start, offset, time: rec.start + offset, norad: rec.norad });
+}
+
+function seekAudio(recId, offset) {
+  const a = $(`#audio-${CSS.escape(recId)}`);
+  if (!a) return;
+  a.currentTime = Math.max(0, offset / 1000 - 3);
+  a.play().catch(() => {});
+}
+
+// ---------- archivos ----------
+async function shareOrDownload(file) {
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: file.name }); return true; } catch (e) { if (e.name === 'AbortError') return false; }
+  }
+  const url = URL.createObjectURL(file);
+  const a = Object.assign(document.createElement('a'), { href: url, download: file.name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return true;
+}
+
+async function downloadRecording(id) {
+  const r = await db.get('recordings', id);
+  if (!r?.blob) return;
+  await shareOrDownload(new File([r.blob], `${r.satName}_${stamp(r.start)}.${extFor(r.mime)}`, { type: r.blob.type || r.mime }));
+}
+
+async function deleteRecording(id) {
+  const r = await db.get('recordings', id);
+  if (!r || !confirm(`¿Borrar la grabación de ${r.satName} del ${new Date(r.start).toLocaleString('es')}? No se puede deshacer. Los QSOs marcados se conservan.`)) return;
+  await db.del('recordings', id);
+  loadLog();
+}
+
+async function exportAdif(all) {
+  const qsos = (await db.all('qsos')).filter(q => all || !q.exported).sort((a, b) => a.time - b.time);
+  if (!qsos.length) return toast(all ? 'Todavía no hay QSOs' : 'No hay QSOs nuevos para exportar');
+  if (!state.settings.myCall) toast('Ojo: no cargaste tu indicativo en Ajustes', 4000);
+  const text = toADIF(qsos, { myCall: state.settings.myCall });
+  const ok = await shareOrDownload(new File([text], `sattracker_${stamp(Date.now())}.adi`, { type: 'text/plain' }));
+  if (!ok) return;
+  for (const q of qsos) await db.put('qsos', { ...q, exported: true });
+  toast(`${qsos.length} QSO(s) exportados ✔`);
+  loadLog();
+}
+
+// ---------- vista Log ----------
+function viewLog() {
+  return `<div class="row"><h2 class="grow">Log y grabaciones</h2>
+    <button class="btn secondary" data-action="qso-new">＋ QSO manual</button></div>
+    <div id="logBody"><div class="empty">Cargando…</div></div>`;
+}
+
+let logUrls = [];
+async function loadLog() {
+  const body = $('#logBody');
+  if (!body) return;
+  const [recs, qsos] = await Promise.all([db.all('recordings'), db.all('qsos')]);
+  logUrls.forEach(u => URL.revokeObjectURL(u));
+  logUrls = [];
+  const recIds = new Set(recs.map(r => r.id));
+  const pending = qsos.filter(q => !q.exported).length;
+
+  const qsoRows = list => list.sort((a, b) => a.time - b.time).map(q => `<tr>
+      <td>${utcHMS(q.time)}</td><td><b>${esc(q.call)}</b><div class="small muted">${esc(q.grid)} ${esc(q.mode)}</div></td>
+      <td class="small">${esc(q.rstSent)}/${esc(q.rstRcvd)}<div>${q.exported ? '✓ export.' : '<span style="color:var(--warn)">nuevo</span>'}</div></td>
+      <td class="nowrap">${q.recId && recIds.has(q.recId) ? `<button class="mini" data-action="seek" data-rec="${esc(q.recId)}" data-offset="${q.offset || 0}">▶ ${fmtDur(q.offset || 0)}</button>` : ''}
+        <button class="mini" data-action="qso-edit" data-qso="${esc(q.id)}">✎</button>
+        <button class="mini" data-action="qso-del" data-qso="${esc(q.id)}">🗑</button></td></tr>`).join('');
+  const table = list => list.length ? `<table class="tbl"><tr><th>UTC</th><th>Indicativo</th><th>RST</th><th></th></tr>${qsoRows(list)}</table>` : '';
+
+  let h = `<div class="card">
+    <div class="row"><b class="grow">Exportar para LoTW / QRZ</b><span class="small muted">${qsos.length} QSO · ${pending} nuevos</span></div>
+    ${state.settings.myCall ? '' : '<p class="small" style="color:var(--warn)">Cargá tu indicativo en Ajustes antes de exportar.</p>'}
+    <div class="btns" style="margin-top:8px"><button class="btn grow" data-action="export-new" ${pending ? '' : 'disabled'}>⬇ ADIF nuevos (${pending})</button>
+      <button class="btn secondary" data-action="export-all" ${qsos.length ? '' : 'disabled'}>Todos</button></div>
+    <details class="small muted" style="margin-top:8px"><summary>¿Cómo los subo?</summary>
+      <p><b>LoTW:</b> pasá el archivo .adi a la compu, abrilo con <b>TQSL</b> → "Sign a log and upload it automatically", elegí tu Station Location. LoTW exige el nombre exacto del satélite (la ISS va como <b>ARISS</b>; la app lo pone sola).</p>
+      <p><b>QRZ:</b> en qrz.com → Logbook → <b>Settings</b> → <b>ADIF Import</b>, subí el .adi.</p>
+      <p>El audio no se sube a ninguno de los dos: queda en tu teléfono para confirmar indicativos y grids escuchando de nuevo.</p></details>
+  </div>`;
+
+  for (const r of recs.sort((a, b) => b.start - a.start)) {
+    const url = r.blob ? URL.createObjectURL(r.blob) : '';
+    if (url) logUrls.push(url);
+    const rq = qsos.filter(q => q.recId === r.id);
+    h += `<div class="card">
+      <div class="row"><b>${esc(r.satName)}</b><span class="small muted">${fmtDay(r.start)} ${fmtTime(r.start)}</span><span class="grow"></span>
+        ${r.status === 'recovered' ? '<span class="badge intermitente">recuperada</span>' : r.status === 'recording' ? '<span class="badge live">grabando</span>' : `<span class="small muted">${fmtDur(r.duration)}</span>`}</div>
+      ${url ? `<audio id="audio-${esc(r.id)}" controls preload="metadata" src="${url}"></audio>` : ''}
+      ${table(rq)}
+      ${r.status === 'recording' ? '' : `<div class="btns" style="margin-top:8px">
+        <button class="btn secondary grow" data-action="qso-here" data-rec="${esc(r.id)}">＋ QSO en este punto</button>
+        <button class="btn secondary" data-action="rec-dl" data-rec="${esc(r.id)}" aria-label="Descargar audio">⬇</button>
+        <button class="btn secondary" data-action="rec-del" data-rec="${esc(r.id)}" aria-label="Borrar grabación">🗑</button></div>`}
+    </div>`;
+  }
+  const loose = qsos.filter(q => !q.recId || !recIds.has(q.recId));
+  if (loose.length) h += `<h3>QSOs sin grabación</h3><div class="card">${table(loose)}</div>`;
+  if (!recs.length && !qsos.length) h += '<div class="empty">Todavía no hay grabaciones ni QSOs.<br>Grabá una pasada desde la pestaña <b>Apuntar</b>.</div>';
+  body.innerHTML = h;
+}
+
 // ---------- eventos ----------
 document.addEventListener('click', async e => {
   const el = e.target.closest('[data-view],[data-pass],[data-passobj],[data-track],[data-fav],[data-action],#locChip');
@@ -663,20 +947,42 @@ document.addEventListener('click', async e => {
     case 'compass-off': return disableCompass();
     case 'wakelock': return toggleWakeLock();
     case 'close-sheet': return $('#sheet').close();
+    case 'rec-start': return startRecording(+el.dataset.norad || state.trackNorad);
+    case 'rec-stop': return stopRecording();
+    case 'qso-mark': return markQso();
+    case 'qso-new': return openQsoForm({ time: Date.now() });
+    case 'qso-here': return qsoAtAudio(el.dataset.rec);
+    case 'qso-edit': return editQso(el.dataset.qso);
+    case 'qso-del': return deleteQso(el.dataset.qso);
+    case 'qso-save': return saveQsoForm();
+    case 'seek': return seekAudio(el.dataset.rec, +el.dataset.offset);
+    case 'rec-dl': return downloadRecording(el.dataset.rec);
+    case 'rec-del': return deleteRecording(el.dataset.rec);
+    case 'export-new': return exportAdif(false);
+    case 'export-all': return exportAdif(true);
     case 'install':
       if (state.installPrompt) { state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; render(); }
   }
 });
 
+document.addEventListener('input', e => {
+  if (e.target.id === 'q_freq' || e.target.id === 'q_freqRx') updateBandHint();
+});
+
 document.addEventListener('change', e => {
   const t = e.target;
+  if (t.id === 'q_sat') { $('#q_smode').innerHTML = modeOptions(+t.value); return applySatMode(+t.value, 0); }
+  if (t.id === 'q_smode') return applySatMode(+$('#q_sat').value, +t.value);
   if (t.id === 'trackSel') {
     state.trackNorad = +t.value; LS.set('track', state.trackNorad);
     return updateTrack();
   }
   const key = t.dataset.setting;
   if (!key) return;
-  state.settings[key] = t.type === 'checkbox' ? t.checked : (key === 'decl' ? parseFloat(t.value.replace(',', '.')) || 0 : +t.value);
+  state.settings[key] = t.type === 'checkbox' ? t.checked
+    : key === 'decl' ? parseFloat(t.value.replace(',', '.')) || 0
+    : key === 'myCall' ? (t.value = t.value.trim().toUpperCase())
+    : +t.value;
   saveSettings();
   if (key === 'minEl' || key === 'hours') computePasses();
   if (key === 'night') document.body.classList.toggle('night', state.settings.night);
@@ -716,6 +1022,7 @@ function tick() {
   const now = new Date();
   $('#clock').textContent = now.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   tickCountdowns();
+  updateRecBar();
   if (state.view === 'track') updateTrack();
   if (now.getMinutes() !== lastMinute) {
     lastMinute = now.getMinutes();
@@ -730,6 +1037,7 @@ function tick() {
 // ---------- arranque ----------
 (async function main() {
   render();
+  recoverOrphans().then(n => n && toast(`Se recuperaron ${n} grabación(es) que quedaron a medias`)).catch(() => {});
   await loadTLE();
   computePasses();
   render();

@@ -6,6 +6,7 @@ PWA (single page app instalable) para trabajar satélites de radioaficionados co
 - **Guía de apuntado**: pasos concretos para la Yagi (hacia dónde esperar, cómo seguirlo, volteo en pasadas cenitales, polarización), tabla minuto a minuto de azimut/elevación y carta del cielo.
 - **Apuntar en vivo**: azimut/elevación en tiempo real, Doppler instantáneo y brújula con el teléfono apoyado sobre el boom ("girá 20° a la derecha · subí 10°").
 - **Frecuencias** de cada satélite (subida, bajada, modo, tono CTCSS) y tabla Doppler AOS/máx/LOS.
+- **Grabación y log**: grabá el audio de la pasada (micrófono del teléfono o cable), marcá cada QSO con un toque (queda la hora UTC y una marca en el audio), completá indicativo/grid/RST escuchando de nuevo, y exportá un **ADIF** listo para **LoTW** (firmar con TQSL) y **QRZ Logbook** (Settings → ADIF Import). El nombre de satélite va como lo exige LoTW (ISS → `ARISS`). Si la app se cierra grabando, el audio se recupera al reabrirla. Todo queda guardado en el teléfono.
 - Funciona **sin conexión** una vez instalada. Los TLE se bajan de CelesTrak cada 12 h (trae una copia incluida).
 
 Sin build: HTML + CSS + JS (módulos ES). Órbitas con SGP4 vía [satellite.js](https://github.com/shashwatak/satellite-js) (incluido en `vendor/`).

@@ -4,12 +4,13 @@
 // type:  'FM'     → repetidora FM (canal único)
 //        'LINEAR' → transpondedor lineal SSB/CW (banda de paso)
 //        'DIGI'   → digipeater / paquetes
+// lotw:  nombre exacto que exige LoTW en SAT_NAME (null = no figura en la lista de LoTW).
 // inverting: en transpondedores lineales, si la banda de bajada está invertida
 //            (subir en uplink => bajar en downlink). Se usa LSB arriba / USB abajo.
 
 export const SATS = [
   {
-    norad: 25544, name: 'ISS', alias: 'Estación Espacial Internacional',
+    norad: 25544, lotw: 'ARISS', name: 'ISS', alias: 'Estación Espacial Internacional',
     status: 'activo', note: 'Repetidora FM cruzada V/U (ARISS). Mucha demanda: llamadas cortas.',
     modes: [
       { type: 'FM', label: 'Repetidora FM voz', up: 145.990, upMode: 'FM', tone: '67.0 Hz', down: 437.800, downMode: 'FM' },
@@ -18,42 +19,42 @@ export const SATS = [
     ],
   },
   {
-    norad: 27607, name: 'SO-50', alias: 'SaudiSat-1C',
+    norad: 27607, lotw: 'SO-50', name: 'SO-50', alias: 'SaudiSat-1C',
     status: 'activo', note: 'Tono 74.4 Hz arma el timer de 10 min; luego usar 67.0 Hz.',
     modes: [
       { type: 'FM', label: 'Repetidora FM', up: 145.850, upMode: 'FM', tone: '67.0 Hz (74.4 Hz armar)', down: 436.795, downMode: 'FM' },
     ],
   },
   {
-    norad: 43017, name: 'AO-91', alias: 'RadFxSat / Fox-1B',
+    norad: 43017, lotw: 'AO-91', name: 'AO-91', alias: 'RadFxSat / Fox-1B',
     status: 'intermitente', note: 'Batería degradada: suele funcionar sólo con sol.',
     modes: [
       { type: 'FM', label: 'Repetidora FM', up: 435.250, upMode: 'FM', tone: '67.0 Hz', down: 145.960, downMode: 'FM' },
     ],
   },
   {
-    norad: 43678, name: 'PO-101', alias: 'Diwata-2B',
+    norad: 43678, lotw: 'PO-101', name: 'PO-101', alias: 'Diwata-2B',
     status: 'programado', note: 'Se activa por horarios anunciados (@Diwata2PH).',
     modes: [
       { type: 'FM', label: 'Repetidora FM', up: 437.500, upMode: 'FM', tone: '141.3 Hz', down: 145.900, downMode: 'FM' },
     ],
   },
   {
-    norad: 61781, name: 'AO-123', alias: 'ASRTU-1',
+    norad: 61781, lotw: 'AO-123', name: 'AO-123', alias: 'ASRTU-1',
     status: 'activo', note: 'Repetidora FM V/U.',
     modes: [
       { type: 'FM', label: 'Repetidora FM', up: 145.850, upMode: 'FM', tone: 'verificar', down: 435.400, downMode: 'FM' },
     ],
   },
   {
-    norad: 22825, name: 'AO-27', alias: 'EYESAT-A',
+    norad: 22825, lotw: 'AO-27', name: 'AO-27', alias: 'EYESAT-A',
     status: 'intermitente', note: 'Satélite antiguo, actividad esporádica.',
     modes: [
       { type: 'FM', label: 'Repetidora FM', up: 145.850, upMode: 'FM', tone: '—', down: 436.795, downMode: 'FM' },
     ],
   },
   {
-    norad: 44909, name: 'RS-44', alias: 'DOSAAF-85',
+    norad: 44909, lotw: 'RS-44', name: 'RS-44', alias: 'DOSAAF-85',
     status: 'activo', note: 'Órbita alta (~1500 km): pasadas largas y alcance enorme. SSB/CW.',
     modes: [
       { type: 'LINEAR', label: 'Transpondedor lineal (invertido)', inverting: true,
@@ -62,7 +63,7 @@ export const SATS = [
     ],
   },
   {
-    norad: 24278, name: 'FO-29', alias: 'JAS-2',
+    norad: 24278, lotw: 'FO-29', name: 'FO-29', alias: 'JAS-2',
     status: 'intermitente', note: 'Funciona según presupuesto de energía.',
     modes: [
       { type: 'LINEAR', label: 'Transpondedor lineal (invertido)', inverting: true,
@@ -71,7 +72,7 @@ export const SATS = [
     ],
   },
   {
-    norad: 7530, name: 'AO-7', alias: 'OSCAR 7',
+    norad: 7530, lotw: 'AO-7', name: 'AO-7', alias: 'OSCAR 7',
     status: 'sólo con sol', note: 'Lanzado en 1974. Alterna Modo A y Modo B al azar.',
     modes: [
       { type: 'LINEAR', label: 'Modo B (U/V, invertido)', inverting: true,
@@ -82,7 +83,7 @@ export const SATS = [
     ],
   },
   {
-    norad: 39444, name: 'AO-73', alias: 'FUNcube-1',
+    norad: 39444, lotw: 'AO-73', name: 'AO-73', alias: 'FUNcube-1',
     status: 'sólo en eclipse', note: 'Transpondedor activo normalmente sólo en sombra.',
     modes: [
       { type: 'LINEAR', label: 'Transpondedor lineal (invertido)', inverting: true,
@@ -91,7 +92,7 @@ export const SATS = [
     ],
   },
   {
-    norad: 50466, name: 'CAS-9', alias: 'XW-3',
+    norad: 50466, lotw: null, name: 'CAS-9', alias: 'XW-3',
     status: 'activo', note: 'Transpondedor lineal U/V.',
     modes: [
       { type: 'LINEAR', label: 'Transpondedor lineal (invertido)', inverting: true,
@@ -100,7 +101,7 @@ export const SATS = [
     ],
   },
   {
-    norad: 60209, name: 'MO-122', alias: 'MESAT-1',
+    norad: 60209, lotw: 'MO-122', name: 'MO-122', alias: 'MESAT-1',
     status: 'activo', note: 'Transpondedor lineal V/U.',
     modes: [
       { type: 'LINEAR', label: 'Transpondedor lineal (invertido)', inverting: true,
@@ -109,7 +110,7 @@ export const SATS = [
     ],
   },
   {
-    norad: 53109, name: 'IO-117', alias: 'GreenCube',
+    norad: 53109, lotw: 'IO-117', name: 'IO-117', alias: 'GreenCube',
     status: 'activo', note: 'Órbita MEO (~5800 km): pasadas de horas, Doppler bajo. Digipeater.',
     modes: [
       { type: 'DIGI', label: 'Digipeater', up: 435.310, upMode: 'GMSK 1200', down: 435.310, downMode: 'GMSK 1200' },

@@ -875,7 +875,7 @@ async function shareImageFor({ recId, key }) {
   const s = state.sats.get(norad);
   const myG = rec?.myGrid || qsos[0]?.myGrid || myGrid();
   const myLoc = gridCenter(myG);
-  let track = [], marks = [];
+  let track = [], marks = [], ground = [], footprint = null;
   const o = myLoc ? observer(myLoc.lat, myLoc.lon, 0) : obs();
   if (s && o) {
     const ref = times.length ? times[Math.floor(times.length / 2)] : start;
@@ -883,11 +883,16 @@ async function shareImageFor({ recId, key }) {
       .find(p => +p.aos - 5 * 60e3 <= ref && ref <= +p.los + 5 * 60e3);
     if (pass) track = pass.track;
     marks = qsos.map(q => look(s.satrec, o, new Date(q.time))).filter(l => l && l.el > -2);
+    // traza en tierra de la pasada (o ±8 min alrededor de los QSOs) y huella en el QSO central
+    const t0 = pass ? +pass.aos : ref - 8 * 60e3, t1 = pass ? +pass.los : ref + 8 * 60e3;
+    for (let t = t0; t <= t1; t += 20e3) { const l = look(s.satrec, o, new Date(t)); if (l) ground.push({ lat: l.lat, lon: l.lon }); }
+    const c = look(s.satrec, o, new Date(ref));
+    if (c && c.el > -2) footprint = { lat: c.lat, lon: c.lon, alt: c.alt };
   }
   const cv = renderPassImage({
     satName: rec?.satName || qsos[0]?.satName || s?.name || '', alias: s?.alias || '',
     start, end, myCall: state.settings.myCall || qsos[0]?.myCall || '', myGrid: myG,
-    qsos, track, marks,
+    myLoc: myLoc || (state.loc && { lat: state.loc.lat, lon: state.loc.lon }), qsos, track, marks, ground, footprint,
   });
   const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
   const name = `${(rec?.satName || qsos[0]?.satName || 'sat').replace(/[^\w-]/g, '')}_${stamp(start)}.png`;

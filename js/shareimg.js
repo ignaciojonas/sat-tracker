@@ -1,5 +1,7 @@
 // Imagen para redes sociales (1080×1350, formato 4:5) con el resumen de una pasada y sus QSOs.
 
+import { LAND } from './land.js';
+
 const W = 1080, H = 1350;
 const C = {
   bg1: '#0b1220', bg2: '#132447', panel: 'rgba(255,255,255,0.05)', line: '#2a3858',
@@ -69,8 +71,126 @@ function skyplot(ctx, cx, cy, R, track, marks) {
   ctx.restore();
 }
 
+// Punto a `distRad` (radianes de arco) desde lat/lon con rumbo `brg` (grados)
+function destination(lat, lon, distRad, brg) {
+  const r = Math.PI / 180, p1 = lat * r, l1 = lon * r, b = brg * r;
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(distRad) + Math.cos(p1) * Math.sin(distRad) * Math.cos(b));
+  const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(distRad) * Math.cos(p1), Math.cos(distRad) - Math.sin(p1) * Math.sin(p2));
+  return { lat: p2 / r, lon: l2 / r };
+}
+
+// Mapa: tierras, huella del satélite, traza en tierra, mi estación y los QSOs.
+function qsoMap(ctx, x0, y0, w, h, { me, qsos, ground, footprint }) {
+  ctx.save();
+  roundRect(ctx, x0, y0, w, h, 20); ctx.fillStyle = '#0d1830'; ctx.fill(); ctx.clip();
+  if (!me) {
+    ctx.fillStyle = C.muted; ctx.font = `500 26px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('Sin ubicación para el mapa', x0 + w / 2, y0 + h / 2);
+    ctx.restore(); return;
+  }
+  const wrap = lon => ((lon - me.lon + 540) % 360) - 180 + me.lon; // longitudes cerca de la mía
+  const R_E = 6371;
+  // huella (zona desde donde se ve el satélite) en el momento del QSO central
+  let fp = [];
+  if (footprint) {
+    const ang = Math.acos(R_E / (R_E + footprint.alt));
+    for (let b = 0; b <= 360; b += 6) fp.push(destination(footprint.lat, footprint.lon, ang, b));
+  }
+  const spots = qsos.map(q => ({ q, p: gridToLatLon(q.grid) })).filter(s => s.p);
+  // encuadre: mi estación, los QSOs y la huella
+  const fit = [me, ...spots.map(s => s.p), ...fp].map(p => ({ lat: p.lat, lon: wrap(p.lon) }));
+  let minLat = Math.min(...fit.map(p => p.lat)), maxLat = Math.max(...fit.map(p => p.lat));
+  let minLon = Math.min(...fit.map(p => p.lon)), maxLon = Math.max(...fit.map(p => p.lon));
+  const midLat = Math.max(-70, Math.min(70, (minLat + maxLat) / 2)), midLon = (minLon + maxLon) / 2;
+  const kx = Math.cos(midLat * Math.PI / 180);
+  let spanX = Math.max((maxLon - minLon) * kx, 26), spanY = Math.max(maxLat - minLat, 20);
+  const s = Math.min(w / (spanX * 1.15), h / (spanY * 1.15));
+  const cx = x0 + w / 2, cy = y0 + h / 2;
+  const P = (lat, lon) => [cx + (wrap(lon) - midLon) * kx * s, cy - (lat - midLat) * s];
+
+  // grilla cada 10°
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+  for (let lat = -80; lat <= 80; lat += 10) { const y = P(lat, me.lon)[1]; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0 + w, y); ctx.stroke(); }
+  for (let lon = -180; lon < 180; lon += 10) {
+    const x = cx + (((lon - midLon + 540) % 360) - 180) * kx * s;
+    ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y0 + h); ctx.stroke();
+  }
+  // tierras (se dibuja cada anillo corrido ±360° para cubrir el antimeridiano)
+  // Las longitudes de cada anillo se "desenrollan" para que no salten de +180 a -180 a mitad de camino.
+  ctx.fillStyle = '#25406e'; ctx.strokeStyle = '#3d5f96'; ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+  for (const ring of LAND) for (const off of [-360, 0, 360]) {
+    ctx.beginPath();
+    let lon = ring[0] / 10;
+    for (let i = 0; i < ring.length; i += 2) {
+      if (i) { let dl = ring[i] / 10 - ring[i - 2] / 10; if (dl > 180) dl -= 360; else if (dl < -180) dl += 360; lon += dl; }
+      const x = cx + (lon + off - midLon) * kx * s, y = cy - (ring[i + 1] / 10 - midLat) * s;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  // huella
+  if (fp.length) {
+    ctx.beginPath();
+    fp.forEach((p, i) => { const [x, y] = P(p.lat, p.lon); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.closePath(); ctx.fillStyle = 'rgba(76,195,255,0.10)'; ctx.fill();
+    ctx.setLineDash([10, 8]); ctx.strokeStyle = 'rgba(76,195,255,0.7)'; ctx.lineWidth = 2.5; ctx.stroke(); ctx.setLineDash([]);
+  }
+  // traza en tierra del satélite durante la pasada
+  if (ground?.length > 1) {
+    ctx.strokeStyle = C.accent; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.beginPath();
+    let prev = null;
+    for (const g of ground) {
+      const [x, y] = P(g.lat, g.lon);
+      if (prev == null || Math.abs(wrap(g.lon) - prev) > 180) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      prev = wrap(g.lon);
+    }
+    ctx.stroke();
+    // flecha de sentido al final
+    const a = ground[ground.length - 2], b = ground[ground.length - 1];
+    const [ax, ay] = P(a.lat, a.lon), [bx, by] = P(b.lat, b.lon);
+    const ang = Math.atan2(by - ay, bx - ax);
+    ctx.fillStyle = C.accent; ctx.beginPath();
+    ctx.moveTo(bx + 16 * Math.cos(ang), by + 16 * Math.sin(ang));
+    ctx.lineTo(bx + 12 * Math.cos(ang + 2.4), by + 12 * Math.sin(ang + 2.4));
+    ctx.lineTo(bx + 12 * Math.cos(ang - 2.4), by + 12 * Math.sin(ang - 2.4));
+    ctx.closePath(); ctx.fill();
+  }
+  if (footprint) {
+    const [x, y] = P(footprint.lat, footprint.lon);
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = C.accent; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fill(); ctx.stroke();
+  }
+  // enlaces y QSOs
+  const [mx, my] = P(me.lat, me.lon);
+  ctx.strokeStyle = 'rgba(255,176,32,0.75)'; ctx.lineWidth = 2.5;
+  for (const { p } of spots) { const [x, y] = P(p.lat, p.lon); ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(x, y); ctx.stroke(); }
+  const labels = spots.length <= 10;
+  ctx.font = `700 20px ${FONT}`; ctx.textBaseline = 'middle';
+  for (const { q, p } of spots) {
+    const [x, y] = P(p.lat, p.lon);
+    ctx.fillStyle = C.warn; ctx.strokeStyle = C.bg1; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.fill(); ctx.stroke();
+    if (labels) {
+      const right = x < x0 + w - 120;
+      ctx.textAlign = right ? 'left' : 'right';
+      ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(11,18,32,0.85)';
+      ctx.strokeText(q.call, x + (right ? 13 : -13), y); ctx.fillStyle = C.text; ctx.fillText(q.call, x + (right ? 13 : -13), y);
+    }
+  }
+  // mi estación
+  ctx.fillStyle = C.good; ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 ? 7 : 16, a = -Math.PI / 2 + i * Math.PI / 5;
+    const x = mx + r * Math.cos(a), y = my + r * Math.sin(a);
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
 /**
- * @param d {satName, alias, start, end, myCall, myGrid, qsos:[{call,grid,time,mode}], track, marks}
+ * @param d {satName, alias, start, end, myCall, myGrid, myLoc, qsos:[{call,grid,time,mode}], track, marks, ground, footprint}
  * @returns HTMLCanvasElement
  */
 export function renderPassImage(d) {
@@ -104,11 +224,8 @@ export function renderPassImage(d) {
   ctx.fillText(`${d.alias ? `${d.alias} · ` : ''}${dateTxt}`, P, 268);
   ctx.fillText(`${utc(d.start)}${d.end && utc(d.end) !== utc(d.start) ? `–${utc(d.end)}` : ''} UTC`, P, 310);
 
-  // carta del cielo (derecha) + estadísticas (izquierda)
-  const top = 350;
-  ctx.fillStyle = C.panel; roundRect(ctx, P, top, W - 2 * P, 420, 28); ctx.fill();
-  skyplot(ctx, W - P - 220, top + 210, 170, d.track, d.marks);
-
+  // estadísticas en una franja
+  const top = 340;
   const dists = d.qsos.map(q => ({ q, km: gridDistanceKm(d.myGrid, q.grid) })).filter(x => x.km != null);
   const odx = [...dists].sort((a, b) => b.km - a.km)[0];
   const grids = new Set(d.qsos.map(q => (q.grid || '').slice(0, 4).toUpperCase()).filter(Boolean));
@@ -117,20 +234,31 @@ export function renderPassImage(d) {
     [String(grids.size), grids.size === 1 ? 'grid' : 'grids'],
     ...(odx ? [[`${Math.round(odx.km).toLocaleString('es')} km`, `ODX · ${odx.q.call}`]] : []),
   ];
+  ctx.fillStyle = C.panel; roundRect(ctx, P, top, W - 2 * P, 116, 28); ctx.fill();
+  const statW = (W - 2 * P) / 3;
   stats.forEach(([v, k], i) => {
-    const y = top + 110 + i * 118;
-    ctx.fillStyle = C.text; fitText(ctx, v, 430, 64, 800); ctx.fillText(v, P + 40, y);
-    ctx.fillStyle = C.muted; ctx.font = `600 26px ${FONT}`; ctx.fillText(k.toUpperCase(), P + 40, y + 38);
+    const x = P + 36 + i * statW;
+    ctx.fillStyle = C.text; fitText(ctx, v, statW - 50, 54, 800); ctx.fillText(v, x, top + 64);
+    ctx.fillStyle = C.muted; fitText(ctx, k.toUpperCase(), statW - 50, 22, 600); ctx.fillText(k.toUpperCase(), x, top + 96);
   });
 
+  // mapa (izquierda) + carta del cielo (derecha)
+  const visTop = top + 136, visH = 400;
+  ctx.fillStyle = C.panel; roundRect(ctx, P, visTop, W - 2 * P, visH, 28); ctx.fill();
+  const mapW = W - 2 * P - 360;
+  qsoMap(ctx, P + 16, visTop + 16, mapW, visH - 32, { me: d.myLoc, qsos: d.qsos, ground: d.ground, footprint: d.footprint });
+  skyplot(ctx, W - P - 172, visTop + visH / 2, 140, d.track, d.marks);
+
   // lista de QSOs
-  const listTop = top + 470;
+  const listTop = visTop + visH + 20;
   const footerH = 110;
   const qs = [...d.qsos].sort((a, b) => a.time - b.time);
-  const twoCols = qs.length > 8;
-  const cols = twoCols ? 2 : 1;
-  const rowH = twoCols ? 46 : 58;
+  const singleRows = Math.floor((H - footerH - listTop - 40) / 58);
+  const compact = qs.length > singleRows;
+  const rowH = compact ? 46 : 58;
   const maxRows = Math.floor((H - footerH - listTop - 40) / rowH);
+  const twoCols = qs.length > maxRows;
+  const cols = twoCols ? 2 : 1;
   const capacity = maxRows * cols;
   const shown = qs.length > capacity ? qs.slice(0, capacity - 1) : qs;
   const colW = (W - 2 * P - (cols - 1) * 24) / cols;

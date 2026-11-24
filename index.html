@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SatTracker">
+  <title>SatTracker · Satélites de radioaficionados</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">📡 <b>SatTracker</b></div>
+    <button id="locChip" class="chip" type="button">Ubicación…</button>
+    <div id="clock" class="clock"></div>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <nav class="tabs">
+    <button data-view="passes" class="active" type="button"><span>🕒</span>Pasadas</button>
+    <button data-view="sats" type="button"><span>🛰️</span>Satélites</button>
+    <button data-view="track" type="button"><span>🎯</span>Apuntar</button>
+    <button data-view="settings" type="button"><span>⚙️</span>Ajustes</button>
+  </nav>
+
+  <dialog id="sheet" class="sheet"><div id="sheetBody"></div></dialog>
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

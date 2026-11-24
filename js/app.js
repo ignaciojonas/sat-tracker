@@ -3,6 +3,7 @@ import { SATS, BY_NORAD } from './sats.js';
 import { db, uid } from './db.js';
 import { Recorder, recoverOrphans, canRecord, extFor } from './recorder.js';
 import { toADIF, adifMode, bandOf } from './adif.js';
+import { renderPassImage, gridToLatLon as gridCenter } from './shareimg.js';
 
 // ---------- utilidades ----------
 const $ = (s, r = document) => r.querySelector(s);
@@ -853,6 +854,56 @@ async function exportAdif(all) {
   loadLog();
 }
 
+// ---------- imagen para redes ----------
+// Agrupa QSOs sueltos por satélite y pasada (QSOs a menos de 25 min entre sí)
+const looseKey = q => `${q.norad}|${Math.floor(q.time / (25 * 60e3))}`;
+
+async function shareImageFor({ recId, key }) {
+  const all = await db.all('qsos');
+  let qsos, rec = null;
+  if (recId) {
+    rec = await db.get('recordings', recId);
+    qsos = all.filter(q => q.recId === recId);
+  } else {
+    const recIds = new Set((await db.all('recordings')).map(r => r.id));
+    qsos = all.filter(q => (!q.recId || !recIds.has(q.recId)) && looseKey(q) === key);
+  }
+  const times = qsos.map(q => q.time);
+  const norad = rec?.norad ?? qsos[0]?.norad;
+  const start = rec?.start ?? Math.min(...times);
+  const end = rec?.end ?? (times.length ? Math.max(...times) : null);
+  const s = state.sats.get(norad);
+  const myG = rec?.myGrid || qsos[0]?.myGrid || myGrid();
+  const myLoc = gridCenter(myG);
+  let track = [], marks = [];
+  const o = myLoc ? observer(myLoc.lat, myLoc.lon, 0) : obs();
+  if (s && o) {
+    const ref = times.length ? times[Math.floor(times.length / 2)] : start;
+    const pass = findPasses(s.satrec, o, { start: new Date(ref - 30 * 60e3), hours: 1.5, minEl: 0 })
+      .find(p => +p.aos - 5 * 60e3 <= ref && ref <= +p.los + 5 * 60e3);
+    if (pass) track = pass.track;
+    marks = qsos.map(q => look(s.satrec, o, new Date(q.time))).filter(l => l && l.el > -2);
+  }
+  const cv = renderPassImage({
+    satName: rec?.satName || qsos[0]?.satName || s?.name || '', alias: s?.alias || '',
+    start, end, myCall: state.settings.myCall || qsos[0]?.myCall || '', myGrid: myG,
+    qsos, track, marks,
+  });
+  const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
+  const name = `${(rec?.satName || qsos[0]?.satName || 'sat').replace(/[^\w-]/g, '')}_${stamp(start)}.png`;
+  state.shareFile = new File([blob], name, { type: 'image/png' });
+  const url = URL.createObjectURL(blob);
+  $('#sheetBody').innerHTML = `<button class="close" data-action="close-sheet" aria-label="Cerrar">✕</button>
+    <h2>Imagen para redes</h2>
+    ${state.settings.myCall ? '' : '<p class="small" style="color:var(--warn)">Cargá tu indicativo en Ajustes para que aparezca en la imagen.</p>'}
+    <img src="${url}" alt="Resumen de la pasada" style="width:100%;border-radius:12px;border:1px solid var(--line)">
+    <button class="btn block" data-action="img-share" style="margin-top:10px">📤 Compartir / guardar</button>
+    <p class="small muted">En el teléfono abre el menú para compartir (Instagram, WhatsApp, X, Facebook…) o guardar en Fotos.</p>`;
+  const d = $('#sheet');
+  if (!d.open) d.showModal();
+  d.addEventListener('close', () => URL.revokeObjectURL(url), { once: true });
+}
+
 // ---------- vista Log ----------
 function viewLog() {
   return `<div class="row"><h2 class="grow">Log y grabaciones</h2>
@@ -900,12 +951,25 @@ async function loadLog() {
       ${table(rq)}
       ${r.status === 'recording' ? '' : `<div class="btns" style="margin-top:8px">
         <button class="btn secondary grow" data-action="qso-here" data-rec="${esc(r.id)}">＋ QSO en este punto</button>
+        <button class="btn secondary" data-action="share-img" data-rec="${esc(r.id)}" aria-label="Imagen para redes">🖼</button>
         <button class="btn secondary" data-action="rec-dl" data-rec="${esc(r.id)}" aria-label="Descargar audio">⬇</button>
         <button class="btn secondary" data-action="rec-del" data-rec="${esc(r.id)}" aria-label="Borrar grabación">🗑</button></div>`}
     </div>`;
   }
   const loose = qsos.filter(q => !q.recId || !recIds.has(q.recId));
-  if (loose.length) h += `<h3>QSOs sin grabación</h3><div class="card">${table(loose)}</div>`;
+  if (loose.length) {
+    h += '<h3>QSOs sin grabación</h3>';
+    const groups = new Map();
+    for (const q of loose) {
+      const k = looseKey(q);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(q);
+    }
+    for (const [k, list] of [...groups].sort((a, b) => b[1][0].time - a[1][0].time)) {
+      h += `<div class="card"><div class="row"><b>${esc(list[0].satName)}</b><span class="small muted">${fmtDay(list[0].time)}</span><span class="grow"></span>
+        <button class="btn secondary" data-action="share-group" data-key="${esc(k)}">🖼 Imagen</button></div>${table(list)}</div>`;
+    }
+  }
   if (!recs.length && !qsos.length) h += '<div class="empty">Todavía no hay grabaciones ni QSOs.<br>Grabá una pasada desde la pestaña <b>Apuntar</b>.</div>';
   body.innerHTML = h;
 }
@@ -960,6 +1024,9 @@ document.addEventListener('click', async e => {
     case 'rec-del': return deleteRecording(el.dataset.rec);
     case 'export-new': return exportAdif(false);
     case 'export-all': return exportAdif(true);
+    case 'share-img': return shareImageFor({ recId: el.dataset.rec });
+    case 'share-group': return shareImageFor({ key: el.dataset.key });
+    case 'img-share': return state.shareFile && shareOrDownload(state.shareFile);
     case 'install':
       if (state.installPrompt) { state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; render(); }
   }

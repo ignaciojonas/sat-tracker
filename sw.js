@@ -1,6 +1,6 @@
 // Service worker: deja la app disponible sin conexión.
 // Al cambiar archivos de la app, subir la versión para forzar la actualización.
-const CACHE = 'sattracker-v2';
+const CACHE = 'sattracker-v3';
 const SHELL = [
   './',
   'index.html',
@@ -20,7 +20,8 @@ const SHELL = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: 'reload' evita guardar copias viejas de la caché HTTP del navegador
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -34,12 +35,20 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return; // TLE de CelesTrak: siempre red
-  // stale-while-revalidate para archivos propios
-  e.respondWith(
-    caches.open(CACHE).then(async cache => {
-      const cached = await cache.match(e.request, { ignoreSearch: true });
-      const net = fetch(e.request).then(r => { if (r.ok) cache.put(e.request, r.clone()); return r; }).catch(() => cached);
-      return cached || net;
-    }),
-  );
+  // Primero la red (para tener siempre la última versión), con la caché como respaldo
+  // si no hay conexión o la red tarda más de 3 s (por ejemplo, en el campo).
+  e.respondWith((async () => {
+    const cache = await caches.open(CACHE);
+    const net = fetch(e.request, { cache: 'no-cache' }).then(r => {
+      if (r.ok) cache.put(e.request, r.clone());
+      return r;
+    });
+    net.catch(() => {});
+    const timeout = new Promise(res => setTimeout(res, 3000));
+    try {
+      const r = await Promise.race([net, timeout]);
+      if (r) return r;
+    } catch { /* sin red */ }
+    return (await cache.match(e.request, { ignoreSearch: true })) || net;
+  })());
 });

@@ -5,7 +5,7 @@ import { LAND } from './land.js';
 const W = 1080, H = 1350;
 const C = {
   bg1: '#0b1220', bg2: '#132447', panel: 'rgba(255,255,255,0.05)', line: '#2a3858',
-  text: '#e6ecf7', muted: '#8d9abb', accent: '#4cc3ff', good: '#3ddc84', bad: '#ff5d6c', warn: '#ffb020',
+  text: '#e6ecf7', muted: '#8d9abb', accent: '#4cc3ff', good: '#3ddc84', bad: '#ff5d6c', warn: '#ffb020', listen: '#b48cff',
 };
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
@@ -65,7 +65,7 @@ function skyplot(ctx, cx, cy, R, track, marks) {
   }
   for (const m of marks || []) {
     const [x, y] = pt(m.az, m.el);
-    ctx.fillStyle = C.warn; ctx.strokeStyle = C.bg1; ctx.lineWidth = 4;
+    ctx.fillStyle = m.listen ? C.listen : C.warn; ctx.strokeStyle = C.bg1; ctx.lineWidth = 4;
     ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fill(); ctx.stroke();
   }
   ctx.restore();
@@ -162,13 +162,20 @@ function qsoMap(ctx, x0, y0, w, h, { me, qsos, ground, footprint }) {
   }
   // enlaces y QSOs
   const [mx, my] = P(me.lat, me.lon);
-  ctx.strokeStyle = 'rgba(255,176,32,0.75)'; ctx.lineWidth = 2.5;
-  for (const { p } of spots) { const [x, y] = P(p.lat, p.lon); ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(x, y); ctx.stroke(); }
+  // contacto: línea llena naranja · escucha: línea punteada violeta
+  ctx.lineWidth = 2.5;
+  for (const { q, p } of spots) {
+    const [x, y] = P(p.lat, p.lon);
+    ctx.strokeStyle = q.listen ? 'rgba(180,140,255,0.8)' : 'rgba(255,176,32,0.75)';
+    ctx.setLineDash(q.listen ? [7, 7] : []);
+    ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(x, y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
   const labels = spots.length <= 10;
   ctx.font = `700 20px ${FONT}`; ctx.textBaseline = 'middle';
   for (const { q, p } of spots) {
     const [x, y] = P(p.lat, p.lon);
-    ctx.fillStyle = C.warn; ctx.strokeStyle = C.bg1; ctx.lineWidth = 3;
+    ctx.fillStyle = q.listen ? C.listen : C.warn; ctx.strokeStyle = C.bg1; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(x, y, 8, 0, 7); ctx.fill(); ctx.stroke();
     if (labels) {
       const right = x < x0 + w - 120;
@@ -186,6 +193,21 @@ function qsoMap(ctx, x0, y0, w, h, { me, qsos, ground, footprint }) {
     i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
   ctx.closePath(); ctx.fill(); ctx.stroke();
+  // referencias
+  const kinds = [...new Set(spots.map(s => !!s.q.listen))];
+  if (kinds.length) {
+    ctx.font = `600 19px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    let lx = x0 + 16;
+    const ly = y0 + h - 22;
+    for (const listen of kinds.sort()) {
+      const t = listen ? '🎧 escucha' : '🤝 contacto';
+      const tw = ctx.measureText(t).width;
+      ctx.fillStyle = 'rgba(11,18,32,0.8)'; roundRect(ctx, lx - 8, ly - 16, tw + 40, 32, 10); ctx.fill();
+      ctx.fillStyle = listen ? C.listen : C.warn; ctx.beginPath(); ctx.arc(lx + 6, ly, 6, 0, 7); ctx.fill();
+      ctx.fillStyle = C.text; ctx.fillText(t, lx + 20, ly);
+      lx += tw + 52;
+    }
+  }
   ctx.restore();
 }
 
@@ -214,7 +236,8 @@ export function renderPassImage(d) {
 
   // encabezado
   ctx.fillStyle = C.accent; ctx.font = `700 30px ${FONT}`;
-  ctx.fillText('📡 QSOs VÍA SATÉLITE', P, 96);
+  const contacts = d.qsos.filter(q => !q.listen), heard = d.qsos.filter(q => q.listen);
+  ctx.fillText(contacts.length || !heard.length ? '📡 QSOs VÍA SATÉLITE' : '🎧 ESCUCHAS VÍA SATÉLITE', P, 96);
   ctx.fillStyle = C.text; fitText(ctx, d.satName, W - 2 * P, 120, 800);
   ctx.fillText(d.satName, P, 216);
   const start = new Date(d.start);
@@ -226,16 +249,19 @@ export function renderPassImage(d) {
 
   // estadísticas en una franja
   const top = 340;
-  const dists = d.qsos.map(q => ({ q, km: gridDistanceKm(d.myGrid, q.grid) })).filter(x => x.km != null);
-  const odx = [...dists].sort((a, b) => b.km - a.km)[0];
+  // ODX entre los contactos; si solo hubo escuchas, la estación más lejana escuchada
+  const far = list => list.map(q => ({ q, km: gridDistanceKm(d.myGrid, q.grid) })).filter(x => x.km != null).sort((a, b) => b.km - a.km)[0];
+  const odx = far(contacts), farHeard = !odx && far(heard);
   const grids = new Set(d.qsos.map(q => (q.grid || '').slice(0, 4).toUpperCase()).filter(Boolean));
   const stats = [
-    [String(d.qsos.length), d.qsos.length === 1 ? 'QSO' : 'QSOs'],
+    ...(contacts.length || !heard.length ? [[String(contacts.length), contacts.length === 1 ? '🤝 QSO' : '🤝 QSOs']] : []),
+    ...(heard.length ? [[String(heard.length), heard.length === 1 ? '🎧 escucha' : '🎧 escuchas']] : []),
     [String(grids.size), grids.size === 1 ? 'grid' : 'grids'],
     ...(odx ? [[`${Math.round(odx.km).toLocaleString('es')} km`, `ODX · ${odx.q.call}`]] : []),
+    ...(farHeard ? [[`${Math.round(farHeard.km).toLocaleString('es')} km`, `más lejana · ${farHeard.q.call}`]] : []),
   ];
   ctx.fillStyle = C.panel; roundRect(ctx, P, top, W - 2 * P, 116, 28); ctx.fill();
-  const statW = (W - 2 * P) / 3;
+  const statW = (W - 2 * P) / stats.length;
   stats.forEach(([v, k], i) => {
     const x = P + 36 + i * statW;
     ctx.fillStyle = C.text; fitText(ctx, v, statW - 50, 54, 800); ctx.fillText(v, x, top + 64);
@@ -267,11 +293,13 @@ export function renderPassImage(d) {
     const col = twoCols ? Math.floor(i / maxRows) : 0, row = twoCols ? i % maxRows : i;
     const x = P + 32 + col * (colW + 24), y = listTop + 56 + row * rowH;
     ctx.fillStyle = C.muted; ctx.font = `500 ${twoCols ? 24 : 26}px ${FONT}`; ctx.fillText(utc(q.time), x, y);
-    ctx.fillStyle = C.text; ctx.font = `800 ${twoCols ? 28 : 34}px ${FONT}`; ctx.fillText(q.call, x + 100, y);
+    ctx.font = `${twoCols ? 24 : 28}px ${FONT}`; ctx.fillText(q.listen ? '🎧' : '🤝', x + (twoCols ? 76 : 86), y);
+    const cx0 = x + (twoCols ? 112 : 130);
+    ctx.fillStyle = q.listen ? C.listen : C.text; ctx.font = `800 ${twoCols ? 28 : 34}px ${FONT}`; ctx.fillText(q.call, cx0, y);
     const callW = ctx.measureText(q.call).width;
     ctx.fillStyle = C.accent; ctx.font = `600 26px ${FONT}`;
     const extra = [q.grid?.toUpperCase(), !twoCols && gridDistanceKm(d.myGrid, q.grid) != null ? `${Math.round(gridDistanceKm(d.myGrid, q.grid))} km` : ''].filter(Boolean).join(' · ');
-    if (extra) ctx.fillText(extra, x + 100 + callW + 18, y);
+    if (extra) ctx.fillText(extra, cx0 + callW + 18, y);
   });
   if (shown.length < qs.length) {
     const i = shown.length, col = twoCols ? Math.floor(i / maxRows) : 0, row = twoCols ? i % maxRows : i;
@@ -280,12 +308,12 @@ export function renderPassImage(d) {
   }
   if (!qs.length) {
     ctx.fillStyle = C.muted; ctx.font = `500 30px ${FONT}`;
-    ctx.fillText('Sin QSOs registrados en esta pasada', P + 32, listTop + 70);
+    ctx.fillText('Sin contactos ni escuchas registrados en esta pasada', P + 32, listTop + 70);
   }
 
   // pie
   ctx.fillStyle = C.text; ctx.font = `800 40px ${FONT}`;
-  const sig = `73 de ${d.myCall || '—'}`;
+  const sig = d.myCall ? `73 de ${d.myCall}` : '🎧 Escuchado desde';
   ctx.fillText(sig, P, H - 52);
   if (d.myGrid) {
     const w = ctx.measureText(sig).width;

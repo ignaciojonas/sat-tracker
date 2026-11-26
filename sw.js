@@ -1,6 +1,6 @@
 // Service worker: deja la app disponible sin conexión.
 // Al cambiar archivos de la app, subir la versión para forzar la actualización.
-const CACHE = 'sattracker-v5';
+const CACHE = 'sattracker-v6';
 const SHELL = [
   './',
   'index.html',

@@ -693,6 +693,8 @@ setInterval(() => {
 }, 120);
 
 // ---------- QSOs ----------
+// Sin indicativo propio cargado no puede haber contacto: todo cuenta como escucha.
+const isListen = q => !!q.listen || !state.settings.myCall;
 function satModes(norad) {
   return (state.sats.get(norad)?.info?.modes || BY_NORAD.get(norad)?.modes || []).filter(m => m.up != null && m.down != null);
 }
@@ -744,8 +746,11 @@ function openQsoForm(draft) {
       <label class="field"><span>Fecha y hora (UTC)</span><input id="q_time" type="datetime-local" step="1" value="${utcInput(q.time)}"></label>
     </div>
     <div class="small muted" id="q_bands"></div>
+    <label class="switch"><span>🎧 Solo escucha (no hubo contacto)
+      <div class="small muted">${state.settings.myCall ? 'Se muestra en la imagen pero no se exporta a LoTW/QRZ.' : 'No cargaste tu indicativo en Ajustes: todo queda como escucha.'}</div></span>
+      <input type="checkbox" id="q_listen" ${isListen(q) ? 'checked' : ''} ${state.settings.myCall ? '' : 'disabled'}></label>
     <label class="field"><span>Nota</span><input id="q_note" value="${esc(q.note)}" placeholder="opcional"></label>
-    <button class="btn block" data-action="qso-save">Guardar QSO</button>`;
+    <button class="btn block" data-action="qso-save">Guardar</button>`;
   if (!q.id) applySatMode(norad, q.smode ?? 0);
   updateBandHint();
   const d = $('#sheet');
@@ -772,12 +777,13 @@ async function saveQsoForm() {
     freqRx: parseFloat($('#q_freqRx').value.replace(',', '.')) || null,
     mode: $('#q_mode').value, time, note: $('#q_note').value.trim(),
     myGrid: q.myGrid || myGrid(), myCall: state.settings.myCall || '',
+    listen: state.settings.myCall ? $('#q_listen').checked : !!q.listen,
     exported: false,
   };
   if (q.recId && q.recStart) rec.offset = Math.max(0, time - q.recStart);
   await db.put('qsos', rec);
   $('#sheet').close();
-  toast(`QSO con ${call} guardado ✔`);
+  toast(isListen(rec) ? `Escucha de ${call} guardada ✔` : `QSO con ${call} guardado ✔`);
   if (state.view === 'log') loadLog();
 }
 
@@ -790,7 +796,7 @@ async function editQso(id) {
 
 async function deleteQso(id) {
   const q = await db.get('qsos', id);
-  if (!q || !confirm(`¿Borrar el QSO con ${q.call}?`)) return;
+  if (!q || !confirm(isListen(q) ? `¿Borrar la escucha de ${q.call}?` : `¿Borrar el QSO con ${q.call}?`)) return;
   await db.del('qsos', id);
   loadLog();
 }
@@ -843,9 +849,10 @@ async function deleteRecording(id) {
 }
 
 async function exportAdif(all) {
-  const qsos = (await db.all('qsos')).filter(q => all || !q.exported).sort((a, b) => a.time - b.time);
-  if (!qsos.length) return toast(all ? 'Todavía no hay QSOs' : 'No hay QSOs nuevos para exportar');
-  if (!state.settings.myCall) toast('Ojo: no cargaste tu indicativo en Ajustes', 4000);
+  if (!state.settings.myCall) return toast('Cargá tu indicativo en Ajustes: sin él todo queda como escucha y no se exporta', 5000);
+  // las escuchas no son contactos: no van a LoTW/QRZ
+  const qsos = (await db.all('qsos')).filter(q => !isListen(q) && (all || !q.exported)).sort((a, b) => a.time - b.time);
+  if (!qsos.length) return toast(all ? 'Todavía no hay QSOs (las escuchas no se exportan)' : 'No hay QSOs nuevos para exportar');
   const text = toADIF(qsos, { myCall: state.settings.myCall });
   const ok = await shareOrDownload(new File([text], `sattracker_${stamp(Date.now())}.adi`, { type: 'text/plain' }));
   if (!ok) return;
@@ -882,7 +889,7 @@ async function shareImageFor({ recId, key }) {
     const pass = findPasses(s.satrec, o, { start: new Date(ref - 30 * 60e3), hours: 1.5, minEl: 0 })
       .find(p => +p.aos - 5 * 60e3 <= ref && ref <= +p.los + 5 * 60e3);
     if (pass) track = pass.track;
-    marks = qsos.map(q => look(s.satrec, o, new Date(q.time))).filter(l => l && l.el > -2);
+    marks = qsos.map(q => { const l = look(s.satrec, o, new Date(q.time)); return l && { ...l, listen: isListen(q) }; }).filter(l => l && l.el > -2);
     // traza en tierra de la pasada (o ±8 min alrededor de los QSOs) y huella en el QSO central
     const t0 = pass ? +pass.aos : ref - 8 * 60e3, t1 = pass ? +pass.los : ref + 8 * 60e3;
     for (let t = t0; t <= t1; t += 20e3) { const l = look(s.satrec, o, new Date(t)); if (l) ground.push({ lat: l.lat, lon: l.lon }); }
@@ -891,8 +898,8 @@ async function shareImageFor({ recId, key }) {
   }
   const cv = renderPassImage({
     satName: rec?.satName || qsos[0]?.satName || s?.name || '', alias: s?.alias || '',
-    start, end, myCall: state.settings.myCall || qsos[0]?.myCall || '', myGrid: myG,
-    myLoc: myLoc || (state.loc && { lat: state.loc.lat, lon: state.loc.lon }), qsos, track, marks, ground, footprint,
+    start, end, myCall: state.settings.myCall || '', myGrid: myG,
+    myLoc: myLoc || (state.loc && { lat: state.loc.lat, lon: state.loc.lon }), qsos: qsos.map(q => ({ ...q, listen: isListen(q) })), track, marks, ground, footprint,
   });
   const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
   const name = `${(rec?.satName || qsos[0]?.satName || 'sat').replace(/[^\w-]/g, '')}_${stamp(start)}.png`;
@@ -924,18 +931,19 @@ async function loadLog() {
   logUrls.forEach(u => URL.revokeObjectURL(u));
   logUrls = [];
   const recIds = new Set(recs.map(r => r.id));
-  const pending = qsos.filter(q => !q.exported).length;
+  const contacts = qsos.filter(q => !isListen(q));
+  const pending = contacts.filter(q => !q.exported).length;
 
   const qsoRows = list => list.sort((a, b) => a.time - b.time).map(q => `<tr>
-      <td>${utcHMS(q.time)}</td><td><b>${esc(q.call)}</b><div class="small muted">${esc(q.grid)} ${esc(q.mode)}</div></td>
-      <td class="small">${esc(q.rstSent)}/${esc(q.rstRcvd)}<div>${q.exported ? '✓ export.' : '<span style="color:var(--warn)">nuevo</span>'}</div></td>
+      <td>${utcHMS(q.time)}</td><td>${isListen(q) ? '🎧' : '🤝'} <b>${esc(q.call)}</b><div class="small muted">${esc(q.grid)} ${esc(q.mode)}</div></td>
+      <td class="small">${esc(q.rstSent)}/${esc(q.rstRcvd)}<div>${isListen(q) ? 'escucha' : q.exported ? '✓ export.' : '<span style="color:var(--warn)">nuevo</span>'}</div></td>
       <td class="nowrap">${q.recId && recIds.has(q.recId) ? `<button class="mini" data-action="seek" data-rec="${esc(q.recId)}" data-offset="${q.offset || 0}">▶ ${fmtDur(q.offset || 0)}</button>` : ''}
         <button class="mini" data-action="qso-edit" data-qso="${esc(q.id)}">✎</button>
         <button class="mini" data-action="qso-del" data-qso="${esc(q.id)}">🗑</button></td></tr>`).join('');
   const table = list => list.length ? `<table class="tbl"><tr><th>UTC</th><th>Indicativo</th><th>RST</th><th></th></tr>${qsoRows(list)}</table>` : '';
 
   let h = `<div class="card">
-    <div class="row"><b class="grow">Exportar para LoTW / QRZ</b><span class="small muted">${qsos.length} QSO · ${pending} nuevos</span></div>
+    <div class="row"><b class="grow">Exportar para LoTW / QRZ</b><span class="small muted">${contacts.length} QSO · ${pending} nuevos${qsos.length > contacts.length ? ` · ${qsos.length - contacts.length} escuchas` : ''}</span></div>
     ${state.settings.myCall ? '' : '<p class="small" style="color:var(--warn)">Cargá tu indicativo en Ajustes antes de exportar.</p>'}
     <div class="btns" style="margin-top:8px"><button class="btn grow" data-action="export-new" ${pending ? '' : 'disabled'}>⬇ ADIF nuevos (${pending})</button>
       <button class="btn secondary" data-action="export-all" ${qsos.length ? '' : 'disabled'}>Todos</button></div>

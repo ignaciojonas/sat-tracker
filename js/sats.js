@@ -116,6 +116,13 @@ export const SATS = [
       { type: 'DIGI', label: 'Digipeater', up: 435.310, upMode: 'GMSK 1200', down: 435.310, downMode: 'GMSK 1200' },
     ],
   },
+  {
+    norad: 57172, lotw: null, name: 'Umka-1', alias: 'RS40S',
+    status: 'activo', note: 'Cubesat 3U de estudiantes de Podolsk (Rusia). Transmite imágenes SSTV seguido: sólo recepción, decodificá con una app de SSTV. Evento HAMFEST INDIA 2026: del sáb 28/11 04:40 UTC al dom 29/11 18:45 UTC, con eQSL por reportar una imagen recibida.',
+    modes: [
+      { type: 'FM', label: 'SSTV (sólo recepción)', up: null, down: 437.625, downMode: 'SSTV (FM)' },
+    ],
+  },
 ];
 
 export const BY_NORAD = new Map(SATS.map(s => [s.norad, s]));

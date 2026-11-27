@@ -696,7 +696,7 @@ setInterval(() => {
 // Sin indicativo propio cargado no puede haber contacto: todo cuenta como escucha.
 const isListen = q => !!q.listen || !state.settings.myCall;
 function satModes(norad) {
-  return (state.sats.get(norad)?.info?.modes || BY_NORAD.get(norad)?.modes || []).filter(m => m.up != null && m.down != null);
+  return (state.sats.get(norad)?.info?.modes || BY_NORAD.get(norad)?.modes || []).filter(m => m.down != null);
 }
 
 function modeOptions(norad, sel = 0) {
@@ -708,10 +708,13 @@ function modeOptions(norad, sel = 0) {
 function applySatMode(norad, idx) {
   const m = satModes(norad)[idx];
   if (!m) return;
-  $('#q_freq').value = f3(center(m.up));
+  $('#q_freq').value = m.up != null ? f3(center(m.up)) : ''; // sólo recepción: sin subida
   $('#q_freqRx').value = f3(center(m.down));
-  const mode = adifMode(m.upMode);
+  const mode = adifMode(m.upMode || m.downMode);
   $('#q_mode').value = mode;
+  // satélite o modo sólo de recepción (sin subida): es una escucha
+  const cb = $('#q_listen');
+  if (cb && !cb.disabled && m.up == null) cb.checked = true;
   updateBandHint();
 }
 
@@ -742,7 +745,7 @@ function openQsoForm(draft) {
       <label class="field"><span>Repetidora / transpondedor</span><select id="q_smode">${modeOptions(norad, q.smode ?? 0)}</select></label>
       <label class="field"><span>TX (subida) MHz</span><input id="q_freq" inputmode="decimal" value="${q.freq ? f3(q.freq) : ''}"></label>
       <label class="field"><span>RX (bajada) MHz</span><input id="q_freqRx" inputmode="decimal" value="${q.freqRx ? f3(q.freqRx) : ''}"></label>
-      <label class="field"><span>Modo</span><select id="q_mode">${['FM', 'SSB', 'CW', 'PKT', 'DATA'].map(m => `<option ${m === q.mode ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
+      <label class="field"><span>Modo</span><select id="q_mode">${['FM', 'SSB', 'CW', 'SSTV', 'PKT', 'DATA'].map(m => `<option ${m === q.mode ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
       <label class="field"><span>Fecha y hora (UTC)</span><input id="q_time" type="datetime-local" step="1" value="${utcInput(q.time)}"></label>
     </div>
     <div class="small muted" id="q_bands"></div>

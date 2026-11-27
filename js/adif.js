@@ -10,6 +10,7 @@ export const bandOf = mhz => (BANDS.find(([a, b]) => mhz >= a && mhz <= b) || []
 /** Modo de emisión ADIF a partir del texto de modo del satélite ("LSB/CW" → SSB, "FM" → FM) */
 export function adifMode(txt = '') {
   const t = txt.toUpperCase();
+  if (t.startsWith('SSTV')) return 'SSTV';
   if (t.startsWith('FM')) return 'FM';
   if (t.startsWith('LSB') || t.startsWith('USB') || t.startsWith('SSB')) return 'SSB';
   if (t.startsWith('CW')) return 'CW';
